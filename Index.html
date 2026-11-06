@@ -276,14 +276,16 @@ const store = {
 };
 
 /* ---------- rendering ---------- */
+const A = 'a';
 function linksHtml(links){
-  return links.map(l => `<a class="chip" href="${esc(safeUrl(l.url))}" target="_blank" rel="noopener noreferrer" title="${esc(l.url)}">
-      <b>${esc(l.label || siteName(l.url))}</b>${l.note ? `<span>${esc(l.note)}</span>` : ''}</a>`).join('');
+  // สร้างแท็กลิงก์ผ่านตัวแปร A เพราะ Apps Script จะไปแก้ข้อความแท็กลิงก์ในโค้ดจน JS พัง
+  return links.map(l => `<${A} class="chip" href="${esc(safeUrl(l.url))}" target="_blank" rel="noopener noreferrer" title="${esc(l.url)}">
+      <b>${esc(l.label || siteName(l.url))}</b>${l.note ? `<span>${esc(l.note)}</span>` : ''}</${A}>`).join('');
 }
 
 function cardHtml(it){
   const s = STATUS[it.status] || STATUS.planning;
-  const img = it.image ? `<img src="${esc(it.image)}" loading="lazy" alt="" onerror="this.parentNode.classList.add('broken')">` : '';
+  const img = it.image ? `<img src="${esc(it.image)}" loading="lazy" alt="">` : '';
   const links = linksHtml(it.links);
   return `<article class="card st-${it.status}" data-id="${esc(it.id)}">
     <div class="thumb ${it.image ? '' : 'noimg'}" data-act="zoom">${img}
@@ -353,6 +355,10 @@ $('#size').addEventListener('input', e => {
 });
 $('#addBtn').addEventListener('click', () => openForm(null));
 
+// รูปโหลดไม่ได้ → แสดง "โหลดรูปไม่ได้"
+$('#main').addEventListener('error', e => {
+  if (e.target.tagName === 'IMG' && e.target.parentNode.classList.contains('thumb')) e.target.parentNode.classList.add('broken');
+}, true);
 $('#main').addEventListener('click', e => {
   const el = e.target.closest('[data-act]'); if (!el) return;
   const card = el.closest('.card'); const it = items.find(i => i.id === card.dataset.id); if (!it) return;
