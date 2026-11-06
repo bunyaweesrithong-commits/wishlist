@@ -3,6 +3,17 @@
 <head>
 <base target="_top">
 <meta charset="utf-8">
+<script>
+  // แสดง error บนหน้าเว็บ (ช่วยหาสาเหตุเวลาค้างที่ "กำลังโหลด…")
+  window.__wlErr = function (msg) {
+    var m = document.getElementById('main');
+    if (!m) { document.addEventListener('DOMContentLoaded', function () { window.__wlErr(msg); }); return; }
+    m.innerHTML = '<p style="color:#e0475b;white-space:pre-wrap;padding:10px 2px"></p>';
+    m.firstChild.textContent = 'เกิดข้อผิดพลาด: ' + msg;
+  };
+  window.addEventListener('error', function (e) { window.__wlErr((e.message || 'error') + ' (line ' + e.lineno + ')'); });
+  window.addEventListener('unhandledrejection', function (e) { window.__wlErr(String((e.reason && e.reason.message) || e.reason)); });
+</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600&family=Mitr:wght@400;500&display=swap" rel="stylesheet">
 <style>
