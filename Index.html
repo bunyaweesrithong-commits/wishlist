@@ -8,8 +8,11 @@
   window.__wlErr = function (msg) {
     var m = document.getElementById('main');
     if (!m) { document.addEventListener('DOMContentLoaded', function () { window.__wlErr(msg); }); return; }
-    m.innerHTML = '<p style="color:#e0475b;white-space:pre-wrap;padding:10px 2px"></p>';
-    m.firstChild.textContent = 'เกิดข้อผิดพลาด: ' + msg;
+    var p = document.createElement('p');
+    p.style.cssText = 'color:#e0475b;white-space:pre-wrap;padding:10px 2px';
+    p.textContent = 'เกิดข้อผิดพลาด: ' + msg;
+    while (m.firstChild) m.removeChild(m.firstChild);
+    m.appendChild(p);
   };
   window.addEventListener('error', function (e) { window.__wlErr((e.message || 'error') + ' (line ' + e.lineno + ')'); });
   window.addEventListener('unhandledrejection', function (e) { window.__wlErr(String((e.reason && e.reason.message) || e.reason)); });
@@ -225,216 +228,271 @@
 <div class="toast" id="toast"></div>
 
 <script>
-const STATUS = {
-  planning: { en:'Planning to buy', th:'อยากได้',          color:'var(--plan)' },
-  preorder: { en:'Pre-ordered',     th:'ซื้อแล้ว รอของ',   color:'var(--pre)'  },
-  bought:   { en:'Bought',          th:'ได้ของแล้ว',       color:'var(--done)' }
+/*
+ * หมายเหตุสำคัญ: Apps Script (HtmlService) ไปแก้ไขโค้ด JS ที่มีข้อความ HTML อยู่ในสตริง
+ * (โดยเฉพาะ template string แบบ backtick หลายบรรทัด) จนเกิด SyntaxError
+ * ไฟล์นี้จึงสร้าง UI ทั้งหมดด้วย DOM ผ่านฟังก์ชัน h() — ห้ามใช้ backtick / ห้ามเขียน HTML เป็นสตริงใน JS
+ */
+var STATUS = {
+  planning: { en: 'Planning to buy', th: 'อยากได้',        color: 'var(--plan)' },
+  preorder: { en: 'Pre-ordered',     th: 'ซื้อแล้ว รอของ', color: 'var(--pre)' },
+  bought:   { en: 'Bought',          th: 'ได้ของแล้ว',     color: 'var(--done)' }
 };
-const SITE_NAMES = {
-  'mercari.com':'Mercari','buyee.jp':'Buyee','suruga-ya.jp':'Suruga-ya','lashinbang.com':'Lashinbang',
-  'amazon.co.jp':'Amazon JP','amazon.com':'Amazon','animate-onlineshop.jp':'Animate','melonbooks.co.jp':'Melonbooks',
-  'toranoana.jp':'Toranoana','x.com':'X','twitter.com':'X','discord.com':'Discord','shopee.co.th':'Shopee',
-  'lazada.co.th':'Lazada','facebook.com':'Facebook','zenmarket.jp':'ZenMarket','auctions.yahoo.co.jp':'Yahoo Auctions',
-  'booth.pm':'BOOTH','pixiv.net':'pixiv','amiami.com':'AmiAmi','amiami.jp':'AmiAmi','goodsmile.info':'Good Smile',
-  'jump-shop-online.com':'Jump Shop','premium-bandai.com':'P-Bandai','p-bandai.jp':'P-Bandai','mandarake.co.jp':'Mandarake',
-  'fromjapan.co.jp':'FromJapan','instagram.com':'Instagram','canva.com':'Canva'
+var STATUS_KEYS = ['planning', 'preorder', 'bought'];
+var SITE_NAMES = {
+  'mercari.com': 'Mercari', 'buyee.jp': 'Buyee', 'suruga-ya.jp': 'Suruga-ya', 'lashinbang.com': 'Lashinbang',
+  'amazon.co.jp': 'Amazon JP', 'amazon.com': 'Amazon', 'animate-onlineshop.jp': 'Animate', 'melonbooks.co.jp': 'Melonbooks',
+  'toranoana.jp': 'Toranoana', 'x.com': 'X', 'twitter.com': 'X', 'discord.com': 'Discord', 'shopee.co.th': 'Shopee',
+  'lazada.co.th': 'Lazada', 'facebook.com': 'Facebook', 'zenmarket.jp': 'ZenMarket', 'auctions.yahoo.co.jp': 'Yahoo Auctions',
+  'booth.pm': 'BOOTH', 'pixiv.net': 'pixiv', 'amiami.com': 'AmiAmi', 'amiami.jp': 'AmiAmi', 'goodsmile.info': 'Good Smile',
+  'jump-shop-online.com': 'Jump Shop', 'premium-bandai.com': 'P-Bandai', 'p-bandai.jp': 'P-Bandai', 'mandarake.co.jp': 'Mandarake',
+  'fromjapan.co.jp': 'FromJapan', 'instagram.com': 'Instagram', 'canva.com': 'Canva'
 };
 
-let items = [], filter = 'all', query = '', editing = null, formStatus = 'planning', uploading = false;
-const $ = s => document.querySelector(s);
+var items = [], filter = 'all', query = '', editing = null, formStatus = 'planning', uploading = false;
+function $(sel) { return document.querySelector(sel); }
 
 /* ---------- utils ---------- */
-const api = (fn, ...args) => new Promise((res, rej) =>
-  google.script.run.withSuccessHandler(res).withFailureHandler(rej)[fn](...args));
-const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const safeUrl = u => /^https?:\/\//i.test(u) ? u : '#';
-const fixUrl = u => { u = u.trim(); return !u || /^https?:\/\//i.test(u) ? u : 'https://' + u; };
-function siteName(url){
-  try{
-    const h = new URL(fixUrl(url)).hostname.replace(/^www\./,'');
-    const parts = h.split('.');
-    for (let i = 0; i < parts.length - 1; i++){
-      const s = parts.slice(i).join('.');
+function api(fn) {
+  var args = Array.prototype.slice.call(arguments, 1);
+  return new Promise(function (res, rej) {
+    var runner = google.script.run.withSuccessHandler(res).withFailureHandler(rej);
+    runner[fn].apply(runner, args);
+  });
+}
+
+// h('div', { cls: 'card', css: '--c:red', data: { id: 1 }, on: { click: fn } }, child1, child2, [child3, ...])
+function h(tag, props) {
+  var el = document.createElement(tag);
+  props = props || {};
+  Object.keys(props).forEach(function (k) {
+    var v = props[k];
+    if (v === null || v === undefined || v === false) return;
+    if (k === 'cls') el.className = v;
+    else if (k === 'css') el.style.cssText = v;
+    else if (k === 'data') Object.keys(v).forEach(function (d) { el.dataset[d] = v[d]; });
+    else if (k === 'on') Object.keys(v).forEach(function (ev) { el.addEventListener(ev, v[ev]); });
+    else el[k] = v;
+  });
+  appendKids(el, Array.prototype.slice.call(arguments, 2));
+  return el;
+}
+function appendKids(el, kids) {
+  kids.forEach(function (c) {
+    if (c === null || c === undefined || c === false || c === '') return;
+    if (Array.isArray(c)) return appendKids(el, c);
+    el.appendChild(c instanceof Node ? c : document.createTextNode(String(c)));
+  });
+}
+function setKids(el) {
+  while (el.firstChild) el.removeChild(el.firstChild);
+  appendKids(el, Array.prototype.slice.call(arguments, 1));
+}
+
+function safeUrl(u) { return /^https?:\/\//i.test(u) ? u : '#'; }
+function fixUrl(u) { u = String(u || '').trim(); return !u || /^https?:\/\//i.test(u) ? u : 'https://' + u; }
+function siteName(url) {
+  try {
+    var host = new URL(fixUrl(url)).hostname.replace(/^www\./, '');
+    var parts = host.split('.');
+    for (var i = 0; i < parts.length - 1; i++) {
+      var s = parts.slice(i).join('.');
       if (SITE_NAMES[s]) return SITE_NAMES[s];
     }
-    return h;
-  }catch(e){ return 'ลิงก์'; }
+    return host;
+  } catch (e) { return 'ลิงก์'; }
 }
-function normalizeImg(u){
-  u = (u || '').trim();
-  const m = u.match(/drive\.google\.com\/(?:file\/d\/|open\?id=|uc\?(?:export=\w+&)?id=)([\w-]+)/);
-  return m ? `https://drive.google.com/thumbnail?id=${m[1]}&sz=w1600` : u;
+function normalizeImg(u) {
+  u = String(u || '').trim();
+  var m = u.match(/drive\.google\.com\/(?:file\/d\/|open\?id=|uc\?(?:export=\w+&)?id=)([\w-]+)/);
+  return m ? 'https://drive.google.com/thumbnail?id=' + m[1] + '&sz=w1600' : u;
 }
-let toastTimer;
-function toast(msg){
-  const t = $('#toast'); t.textContent = msg; t.classList.add('show');
-  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), 2600);
+var toastTimer;
+function toast(msg) {
+  var t = $('#toast'); t.textContent = msg; t.classList.add('show');
+  clearTimeout(toastTimer); toastTimer = setTimeout(function () { t.classList.remove('show'); }, 2600);
 }
-const store = {
-  get(k, d){ try{ const v = localStorage.getItem('wl_'+k); return v === null ? d : v; }catch(e){ return d; } },
-  set(k, v){ try{ localStorage.setItem('wl_'+k, v); }catch(e){} }
+var store = {
+  get: function (k, d) { try { var v = localStorage.getItem('wl_' + k); return v === null ? d : v; } catch (e) { return d; } },
+  set: function (k, v) { try { localStorage.setItem('wl_' + k, v); } catch (e) {} }
 };
+function countOf(k) { return items.filter(function (i) { return i.status === k; }).length; }
 
 /* ---------- rendering ---------- */
-const A = 'a';
-function linksHtml(links){
-  // สร้างแท็กลิงก์ผ่านตัวแปร A เพราะ Apps Script จะไปแก้ข้อความแท็กลิงก์ในโค้ดจน JS พัง
-  return links.map(l => `<${A} class="chip" href="${esc(safeUrl(l.url))}" target="_blank" rel="noopener noreferrer" title="${esc(l.url)}">
-      <b>${esc(l.label || siteName(l.url))}</b>${l.note ? `<span>${esc(l.note)}</span>` : ''}</${A}>`).join('');
+function linksEl(links) {
+  if (!links || !links.length) return null;
+  return h('div', { cls: 'links' }, links.map(function (l) {
+    return h('a', { cls: 'chip', href: safeUrl(l.url), target: '_blank', rel: 'noopener noreferrer', title: l.url },
+      h('b', null, l.label || siteName(l.url)),
+      l.note ? h('span', null, l.note) : null);
+  }));
 }
 
-function cardHtml(it){
-  const s = STATUS[it.status] || STATUS.planning;
-  const img = it.image ? `<img src="${esc(it.image)}" loading="lazy" alt="">` : '';
-  const links = linksHtml(it.links);
-  return `<article class="card st-${it.status}" data-id="${esc(it.id)}">
-    <div class="thumb ${it.image ? '' : 'noimg'}" data-act="zoom">${img}
-      <span class="badge" style="background:${s.color}">${s.en}</span></div>
-    <div class="body">
-      <h3 class="name">${esc(it.name)}</h3>
-      ${it.price ? `<div class="price">${esc(it.price)}</div>` : ''}
-      ${links ? `<div class="links">${links}</div>` : ''}
-      ${it.note ? `<p class="note">${esc(it.note)}</p>` : ''}
-    </div>
-    <div class="foot">
-      <select data-act="status" title="เปลี่ยนสถานะ">
-        ${Object.keys(STATUS).map(k => `<option value="${k}" ${k === it.status ? 'selected' : ''}>${STATUS[k].en}</option>`).join('')}
-      </select>
-      <button class="icon" data-act="edit" title="แก้ไข">✎</button>
-      <button class="icon danger" data-act="del" title="ลบ">🗑</button>
-    </div>
-  </article>`;
+function cardEl(it) {
+  var s = STATUS[it.status] || STATUS.planning;
+  var thumb = h('div', { cls: 'thumb' + (it.image ? '' : ' noimg'), data: { act: 'zoom' } },
+    h('span', { cls: 'badge', css: 'background:' + s.color }, s.en));
+  if (it.image) {
+    var img = h('img', { alt: '', loading: 'lazy' });
+    img.addEventListener('error', function () { thumb.classList.add('broken'); });
+    img.src = it.image;
+    thumb.insertBefore(img, thumb.firstChild);
+  }
+  var select = h('select', { title: 'เปลี่ยนสถานะ', data: { act: 'status' } },
+    STATUS_KEYS.map(function (k) { return h('option', { value: k, selected: k === it.status }, STATUS[k].en); }));
+  select.value = it.status;
+
+  return h('article', { cls: 'card st-' + it.status, data: { id: it.id } },
+    thumb,
+    h('div', { cls: 'body' },
+      h('h3', { cls: 'name' }, it.name),
+      it.price ? h('div', { cls: 'price' }, it.price) : null,
+      linksEl(it.links),
+      it.note ? h('p', { cls: 'note' }, it.note) : null),
+    h('div', { cls: 'foot' },
+      select,
+      h('button', { cls: 'icon', title: 'แก้ไข', data: { act: 'edit' } }, '✎'),
+      h('button', { cls: 'icon danger', title: 'ลบ', data: { act: 'del' } }, '🗑')));
 }
 
-function renderTabs(){
-  const count = k => items.filter(i => i.status === k).length;
-  const tabs = [['all','ทั้งหมด', items.length, 'var(--accent)']]
-    .concat(Object.keys(STATUS).map(k => [k, STATUS[k].en, count(k), STATUS[k].color]));
-  $('#tabs').innerHTML = tabs.map(([k, label, n, c]) =>
-    `<button class="tab ${filter === k ? 'on' : ''}" data-f="${k}" style="--c:${c}">${label}<span class="n">${n}</span></button>`).join('');
+function renderTabs() {
+  var tabs = [['all', 'ทั้งหมด', items.length, 'var(--accent)']].concat(
+    STATUS_KEYS.map(function (k) { return [k, STATUS[k].en, countOf(k), STATUS[k].color]; }));
+  setKids($('#tabs'), tabs.map(function (t) {
+    return h('button', { cls: 'tab' + (filter === t[0] ? ' on' : ''), css: '--c:' + t[3], data: { f: t[0] } },
+      t[1], h('span', { cls: 'n' }, String(t[2])));
+  }));
   $('#summary').textContent = items.length
-    ? `อยากได้ ${count('planning')} · รอของ ${count('preorder')} · ได้แล้ว ${count('bought')}`
+    ? 'อยากได้ ' + countOf('planning') + ' · รอของ ' + countOf('preorder') + ' · ได้แล้ว ' + countOf('bought')
     : 'ยังไม่มีของในลิสต์';
 }
 
-function render(){
+function render() {
   renderTabs();
-  const main = $('#main');
-  if (!items.length){
-    main.innerHTML = `<div class="empty"><h2>Wishlist ยังว่างอยู่</h2><p>กด “+ เพิ่มของ” เพื่อเริ่มเพิ่มของชิ้นแรก</p></div>`;
+  var main = $('#main');
+  if (!items.length) {
+    setKids(main, h('div', { cls: 'empty' },
+      h('h2', null, 'Wishlist ยังว่างอยู่'),
+      h('p', null, 'กด “+ เพิ่มของ” เพื่อเริ่มเพิ่มของชิ้นแรก')));
     return;
   }
-  const q = query.trim().toLowerCase();
-  const list = items
-    .filter(it => !q || [it.name, it.note, it.price, ...it.links.map(l => (l.label || siteName(l.url)) + ' ' + l.note)]
-                         .join(' ').toLowerCase().includes(q))
-    .sort((a, b) => b.updatedAt - a.updatedAt);
+  var q = query.trim().toLowerCase();
+  var list = items.filter(function (it) {
+    if (!q) return true;
+    var text = [it.name, it.note, it.price].concat(it.links.map(function (l) {
+      return (l.label || siteName(l.url)) + ' ' + l.note;
+    })).join(' ').toLowerCase();
+    return text.indexOf(q) >= 0;
+  }).sort(function (a, b) { return b.updatedAt - a.updatedAt; });
 
-  const keys = filter === 'all' ? Object.keys(STATUS) : [filter];
-  let html = '';
-  keys.forEach(k => {
-    const group = list.filter(i => i.status === k);
+  var keys = filter === 'all' ? STATUS_KEYS : [filter];
+  var sections = [];
+  keys.forEach(function (k) {
+    var group = list.filter(function (i) { return i.status === k; });
     if (filter === 'all' && !group.length) return;
-    html += `<section class="group">
-      <h2 class="group-title" style="--c:${STATUS[k].color}"><span class="dot"></span>${STATUS[k].en}
-        <small>${STATUS[k].th} · ${group.length} ชิ้น</small></h2>
-      ${group.length ? `<div class="grid">${group.map(cardHtml).join('')}</div>` : '<p class="none">ยังไม่มีของในหมวดนี้</p>'}
-    </section>`;
+    sections.push(h('section', { cls: 'group' },
+      h('h2', { cls: 'group-title', css: '--c:' + STATUS[k].color },
+        h('span', { cls: 'dot' }), STATUS[k].en,
+        h('small', null, STATUS[k].th + ' · ' + group.length + ' ชิ้น')),
+      group.length ? h('div', { cls: 'grid' }, group.map(cardEl))
+                   : h('p', { cls: 'none' }, 'ยังไม่มีของในหมวดนี้')));
   });
-  main.innerHTML = html || '<p class="none">ไม่พบของที่ค้นหา</p>';
+  setKids(main, sections.length ? sections : h('p', { cls: 'none' }, 'ไม่พบของที่ค้นหา'));
 }
 
 /* ---------- main list events ---------- */
-$('#tabs').addEventListener('click', e => {
-  const b = e.target.closest('[data-f]'); if (!b) return;
+$('#tabs').addEventListener('click', function (e) {
+  var b = e.target.closest('[data-f]'); if (!b) return;
   filter = b.dataset.f; store.set('filter', filter); render();
 });
-$('#q').addEventListener('input', e => { query = e.target.value; render(); });
-$('#size').addEventListener('input', e => {
+$('#q').addEventListener('input', function (e) { query = e.target.value; render(); });
+$('#size').addEventListener('input', function (e) {
   document.documentElement.style.setProperty('--card-w', e.target.value + 'px'); store.set('size', e.target.value);
 });
-$('#addBtn').addEventListener('click', () => openForm(null));
+$('#addBtn').addEventListener('click', function () { openForm(null); });
 
-// รูปโหลดไม่ได้ → แสดง "โหลดรูปไม่ได้"
-$('#main').addEventListener('error', e => {
-  if (e.target.tagName === 'IMG' && e.target.parentNode.classList.contains('thumb')) e.target.parentNode.classList.add('broken');
-}, true);
-$('#main').addEventListener('click', e => {
-  const el = e.target.closest('[data-act]'); if (!el) return;
-  const card = el.closest('.card'); const it = items.find(i => i.id === card.dataset.id); if (!it) return;
-  const act = el.dataset.act;
+$('#main').addEventListener('click', function (e) {
+  var el = e.target.closest('[data-act]'); if (!el) return;
+  var card = el.closest('.card'); if (!card) return;
+  var it = items.find(function (i) { return i.id === card.dataset.id; }); if (!it) return;
+  var act = el.dataset.act;
   if (act === 'zoom' && it.image && !el.classList.contains('broken')) openLightbox(it);
   if (act === 'edit') openForm(it);
-  if (act === 'del'){
-    if (el.dataset.armed){ doDelete(it); return; }
-    el.dataset.armed = 1; el.classList.add('armed'); el.textContent = 'ยืนยันลบ?';
-    setTimeout(() => { if (el.isConnected){ delete el.dataset.armed; el.classList.remove('armed'); el.textContent = '🗑'; } }, 3000);
+  if (act === 'del') {
+    if (el.dataset.armed) { doDelete(it); return; }
+    el.dataset.armed = '1'; el.classList.add('armed'); el.textContent = 'ยืนยันลบ?';
+    setTimeout(function () {
+      if (el.isConnected) { delete el.dataset.armed; el.classList.remove('armed'); el.textContent = '🗑'; }
+    }, 3000);
   }
 });
-$('#main').addEventListener('change', async e => {
+$('#main').addEventListener('change', function (e) {
   if (e.target.dataset.act !== 'status') return;
-  const id = e.target.closest('.card').dataset.id;
-  const it = items.find(i => i.id === id); const prev = it.status;
+  var id = e.target.closest('.card').dataset.id;
+  var it = items.find(function (i) { return i.id === id; });
+  var prev = it.status;
   it.status = e.target.value; it.updatedAt = Date.now(); render();
-  try { Object.assign(it, await api('setStatus', id, it.status)); toast('ย้ายไป “' + STATUS[it.status].en + '” แล้ว'); }
-  catch(err){ it.status = prev; render(); toast('เปลี่ยนสถานะไม่สำเร็จ: ' + err.message); }
+  api('setStatus', id, it.status)
+    .then(function (saved) { Object.assign(it, saved); toast('ย้ายไป “' + STATUS[it.status].en + '” แล้ว'); })
+    .catch(function (err) { it.status = prev; render(); toast('เปลี่ยนสถานะไม่สำเร็จ: ' + (err.message || err)); });
 });
 
-async function doDelete(it){
-  const idx = items.indexOf(it); items.splice(idx, 1); render();
-  try { await api('deleteItem', it.id); toast('ลบแล้ว'); }
-  catch(err){ items.splice(idx, 0, it); render(); toast('ลบไม่สำเร็จ: ' + err.message); }
+function doDelete(it) {
+  var idx = items.indexOf(it); items.splice(idx, 1); render();
+  api('deleteItem', it.id)
+    .then(function () { toast('ลบแล้ว'); })
+    .catch(function (err) { items.splice(idx, 0, it); render(); toast('ลบไม่สำเร็จ: ' + (err.message || err)); });
 }
 
 /* ---------- lightbox ---------- */
-function openLightbox(it){
+function openLightbox(it) {
   $('#lbImg').src = it.image;
-  const links = linksHtml(it.links);
-  $('#lbCap').innerHTML = `<h3>${esc(it.name)}</h3>${links ? `<div class="links">${links}</div>` : ''}`;
+  setKids($('#lbCap'), h('h3', null, it.name), linksEl(it.links));
   $('#lightbox').hidden = false;
 }
-$('#lightbox').addEventListener('click', e => { if (!e.target.closest('.lb-cap')) $('#lightbox').hidden = true; });
+$('#lightbox').addEventListener('click', function (e) { if (!e.target.closest('.lb-cap')) $('#lightbox').hidden = true; });
 
 /* ---------- form ---------- */
-function renderSeg(val){
+function renderSeg(val) {
   formStatus = val;
-  $('#fStatus').innerHTML = Object.keys(STATUS).map(k =>
-    `<button type="button" data-k="${k}" class="${k === val ? 'on' : ''}" style="--c:${STATUS[k].color}">
-       <b>${STATUS[k].en}</b><small>${STATUS[k].th}</small></button>`).join('');
+  setKids($('#fStatus'), STATUS_KEYS.map(function (k) {
+    return h('button', { type: 'button', cls: k === val ? 'on' : '', css: '--c:' + STATUS[k].color, data: { k: k } },
+      h('b', null, STATUS[k].en), h('small', null, STATUS[k].th));
+  }));
 }
-$('#fStatus').addEventListener('click', e => { const b = e.target.closest('[data-k]'); if (b) renderSeg(b.dataset.k); });
+$('#fStatus').addEventListener('click', function (e) { var b = e.target.closest('[data-k]'); if (b) renderSeg(b.dataset.k); });
 
-function refreshLinkEmpty(){
-  const box = $('#linkRows');
-  const empty = box.querySelector('.link-empty');
-  if (!box.querySelector('.link-row') && !empty) box.innerHTML = '<div class="link-empty">ยังไม่มีลิงก์ — กด “+ เพิ่มลิงก์” เพื่อแนบร้านต่างๆ ไว้เทียบ</div>';
-  if (box.querySelector('.link-row') && empty) empty.remove();
+function refreshLinkEmpty() {
+  var box = $('#linkRows');
+  var empty = box.querySelector('.link-empty');
+  var hasRow = !!box.querySelector('.link-row');
+  if (!hasRow && !empty) setKids(box, h('div', { cls: 'link-empty' }, 'ยังไม่มีลิงก์ — กด “+ เพิ่มลิงก์” เพื่อแนบร้านต่างๆ ไว้เทียบ'));
+  if (hasRow && empty) empty.remove();
 }
-function addLinkRow(l = {}){
-  const row = document.createElement('div'); row.className = 'link-row';
-  row.innerHTML = `<input class="l-url" placeholder="วางลิงก์ เช่น https://jp.mercari.com/item/…" value="${esc(l.url || '')}">
-    <div class="sub2">
-      <input class="l-label" placeholder="ชื่อร้าน (เว้นว่าง = อัตโนมัติ)" value="${esc(l.label || '')}">
-      <input class="l-note" placeholder="ราคา / ค่าส่ง / หมายเหตุ" value="${esc(l.note || '')}">
-    </div>
-    <button type="button" class="icon" title="ลบลิงก์">×</button>`;
-  const url = row.querySelector('.l-url'), label = row.querySelector('.l-label');
-  const upd = () => { label.placeholder = url.value.trim() ? siteName(url.value) + ' (อัตโนมัติ)' : 'ชื่อร้าน (เว้นว่าง = อัตโนมัติ)'; };
+function addLinkRow(l) {
+  l = l || {};
+  var url = h('input', { cls: 'l-url', placeholder: 'วางลิงก์ เช่น https://jp.mercari.com/item/…', value: l.url || '' });
+  var label = h('input', { cls: 'l-label', value: l.label || '' });
+  var note = h('input', { cls: 'l-note', placeholder: 'ราคา / ค่าส่ง / หมายเหตุ', value: l.note || '' });
+  var row = h('div', { cls: 'link-row' }, url, h('div', { cls: 'sub2' }, label, note),
+    h('button', { type: 'button', cls: 'icon', title: 'ลบลิงก์', on: { click: function () { row.remove(); refreshLinkEmpty(); } } }, '×'));
+  function upd() { label.placeholder = url.value.trim() ? siteName(url.value) + ' (อัตโนมัติ)' : 'ชื่อร้าน (เว้นว่าง = อัตโนมัติ)'; }
   url.addEventListener('input', upd); upd();
-  row.querySelector('.icon').addEventListener('click', () => { row.remove(); refreshLinkEmpty(); });
   $('#linkRows').appendChild(row); refreshLinkEmpty();
   return row;
 }
-$('#addLink').addEventListener('click', () => addLinkRow().querySelector('.l-url').focus());
+$('#addLink').addEventListener('click', function () { addLinkRow().querySelector('.l-url').focus(); });
 
-function setPreview(src){
-  const p = $('#preview');
-  if (src){ p.src = src; p.hidden = false; $('#dropHint').hidden = true; }
+function setPreview(src) {
+  var p = $('#preview');
+  if (src) { p.src = src; p.hidden = false; $('#dropHint').hidden = true; }
   else { p.removeAttribute('src'); p.hidden = true; $('#dropHint').hidden = false; }
 }
-$('#preview').addEventListener('error', () => { if ($('#preview').getAttribute('src')) toast('โหลดรูปจากลิงก์นี้ไม่ได้ — ลองอัปโหลดไฟล์แทน'); });
+$('#preview').addEventListener('error', function () {
+  if ($('#preview').getAttribute('src')) toast('โหลดรูปจากลิงก์นี้ไม่ได้ — ลองอัปโหลดไฟล์แทน');
+});
 
-function openForm(it){
+function openForm(it) {
   editing = it;
   $('#formTitle').textContent = it ? 'แก้ไขของ' : 'เพิ่มของ';
   $('#fName').value = it ? it.name : '';
@@ -443,113 +501,126 @@ function openForm(it){
   $('#fImage').value = it ? it.image : '';
   setPreview(it ? it.image : '');
   renderSeg(it ? it.status : (filter !== 'all' ? filter : 'planning'));
-  $('#linkRows').innerHTML = '';
-  (it && it.links.length ? it.links : [{}]).forEach(addLinkRow);
+  setKids($('#linkRows'));
+  (it && it.links.length ? it.links : [{}]).forEach(function (l) { addLinkRow(l); });
   $('#modal').hidden = false;
-  setTimeout(() => $('#fName').focus(), 30);
+  setTimeout(function () { $('#fName').focus(); }, 30);
 }
-function closeForm(){ if (uploading) return toast('รออัปโหลดรูปเสร็จก่อนนะ'); $('#modal').hidden = true; editing = null; }
-document.querySelectorAll('[data-close]').forEach(b => b.addEventListener('click', closeForm));
-$('#modal').addEventListener('mousedown', e => { if (e.target.id === 'modal') closeForm(); });
+function closeForm() {
+  if (uploading) { toast('รออัปโหลดรูปเสร็จก่อนนะ'); return; }
+  $('#modal').hidden = true; editing = null;
+}
+document.querySelectorAll('[data-close]').forEach(function (b) { b.addEventListener('click', closeForm); });
+$('#modal').addEventListener('mousedown', function (e) { if (e.target.id === 'modal') closeForm(); });
 
-$('#fImage').addEventListener('change', e => { e.target.value = normalizeImg(e.target.value); setPreview(e.target.value); });
-$('#clearImg').addEventListener('click', () => { $('#fImage').value = ''; setPreview(''); });
+$('#fImage').addEventListener('change', function (e) { e.target.value = normalizeImg(e.target.value); setPreview(e.target.value); });
+$('#clearImg').addEventListener('click', function () { $('#fImage').value = ''; setPreview(''); });
 
 /* image upload: click / drag-drop / paste */
-const drop = $('#drop');
-drop.addEventListener('click', () => $('#file').click());
-$('#file').addEventListener('change', e => { if (e.target.files[0]) handleImageFile(e.target.files[0]); e.target.value = ''; });
-drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('over'); });
-drop.addEventListener('dragleave', () => drop.classList.remove('over'));
-drop.addEventListener('drop', e => {
+var drop = $('#drop');
+drop.addEventListener('click', function () { $('#file').click(); });
+$('#file').addEventListener('change', function (e) { if (e.target.files[0]) handleImageFile(e.target.files[0]); e.target.value = ''; });
+drop.addEventListener('dragover', function (e) { e.preventDefault(); drop.classList.add('over'); });
+drop.addEventListener('dragleave', function () { drop.classList.remove('over'); });
+drop.addEventListener('drop', function (e) {
   e.preventDefault(); drop.classList.remove('over');
-  const f = [...e.dataTransfer.files].find(f => f.type.startsWith('image/'));
-  if (f) return handleImageFile(f);
-  const url = e.dataTransfer.getData('text/uri-list') || e.dataTransfer.getData('text/plain');
-  if (url){ $('#fImage').value = normalizeImg(url); setPreview($('#fImage').value); }
+  var f = Array.prototype.find.call(e.dataTransfer.files, function (f) { return f.type.indexOf('image/') === 0; });
+  if (f) { handleImageFile(f); return; }
+  var url = e.dataTransfer.getData('text/uri-list') || e.dataTransfer.getData('text/plain');
+  if (url) { $('#fImage').value = normalizeImg(url); setPreview($('#fImage').value); }
 });
-document.addEventListener('paste', e => {
-  if ($('#modal').hidden) return;
-  const f = [...(e.clipboardData?.items || [])].find(i => i.type.startsWith('image/'));
-  if (f){ e.preventDefault(); handleImageFile(f.getAsFile()); }
+document.addEventListener('paste', function (e) {
+  if ($('#modal').hidden || !e.clipboardData) return;
+  var f = Array.prototype.find.call(e.clipboardData.items, function (i) { return i.type.indexOf('image/') === 0; });
+  if (f) { e.preventDefault(); handleImageFile(f.getAsFile()); }
 });
 
-function readAsDataUrl(file){
-  return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(file); });
+function readAsDataUrl(file) {
+  return new Promise(function (res, rej) {
+    var r = new FileReader(); r.onload = function () { res(r.result); }; r.onerror = rej; r.readAsDataURL(file);
+  });
 }
-async function shrink(file, max = 1600){
-  const url = await readAsDataUrl(file);
-  if (file.type === 'image/gif') return url;
-  const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = url; });
-  const scale = Math.min(1, max / Math.max(img.width, img.height));
-  const c = document.createElement('canvas');
-  c.width = Math.round(img.width * scale); c.height = Math.round(img.height * scale);
-  const ctx = c.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height);
-  ctx.drawImage(img, 0, 0, c.width, c.height);
-  return c.toDataURL('image/jpeg', 0.9);
+function shrink(file, max) {
+  max = max || 1600;
+  return readAsDataUrl(file).then(function (url) {
+    if (file.type === 'image/gif') return url;
+    return new Promise(function (res, rej) {
+      var img = new Image();
+      img.onload = function () {
+        var scale = Math.min(1, max / Math.max(img.width, img.height));
+        var c = document.createElement('canvas');
+        c.width = Math.round(img.width * scale); c.height = Math.round(img.height * scale);
+        var ctx = c.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height);
+        ctx.drawImage(img, 0, 0, c.width, c.height);
+        res(c.toDataURL('image/jpeg', 0.9));
+      };
+      img.onerror = rej;
+      img.src = url;
+    });
+  });
 }
-async function handleImageFile(file){
+function handleImageFile(file) {
   if (uploading) return;
   uploading = true; $('#uploading').hidden = false; $('#saveBtn').disabled = true;
-  try{
-    const dataUrl = await shrink(file);
+  shrink(file).then(function (dataUrl) {
     setPreview(dataUrl);
-    const name = (file.name || 'pasted').replace(/\.[^.]+$/, '') + '_' + Date.now() + '.jpg';
-    const url = await api('uploadImage', dataUrl, name);
-    $('#fImage').value = url;
-    toast('อัปโหลดรูปแล้ว');
-  }catch(err){
-    toast('อัปโหลดไม่สำเร็จ: ' + (err.message || err));
+    var name = String(file.name || 'pasted').replace(/\.[^.]+$/, '') + '_' + Date.now() + '.jpg';
+    return api('uploadImage', dataUrl, name);
+  }).then(function (url) {
+    $('#fImage').value = url; toast('อัปโหลดรูปแล้ว');
+  }).catch(function (err) {
+    toast('อัปโหลดไม่สำเร็จ: ' + ((err && err.message) || err));
     setPreview($('#fImage').value);
-  }finally{
+  }).then(function () {
     uploading = false; $('#uploading').hidden = true; $('#saveBtn').disabled = false;
-  }
+  });
 }
 
-$('#form').addEventListener('submit', async e => {
+$('#form').addEventListener('submit', function (e) {
   e.preventDefault();
-  if (uploading) return toast('รออัปโหลดรูปเสร็จก่อนนะ');
-  const name = $('#fName').value.trim();
-  if (!name){ $('#fName').focus(); return toast('ใส่ชื่อของก่อนนะ'); }
-  const links = [...document.querySelectorAll('.link-row')].map(r => ({
-    url: fixUrl(r.querySelector('.l-url').value),
-    label: r.querySelector('.l-label').value.trim(),
-    note: r.querySelector('.l-note').value.trim()
-  })).filter(l => l.url);
-  const data = {
+  if (uploading) { toast('รออัปโหลดรูปเสร็จก่อนนะ'); return; }
+  var name = $('#fName').value.trim();
+  if (!name) { $('#fName').focus(); toast('ใส่ชื่อของก่อนนะ'); return; }
+  var links = Array.prototype.map.call(document.querySelectorAll('.link-row'), function (r) {
+    return {
+      url: fixUrl(r.querySelector('.l-url').value),
+      label: r.querySelector('.l-label').value.trim(),
+      note: r.querySelector('.l-note').value.trim()
+    };
+  }).filter(function (l) { return l.url; });
+  var data = {
     id: editing ? editing.id : '', createdAt: editing ? editing.createdAt : 0,
-    name, image: normalizeImg($('#fImage').value), status: formStatus,
-    price: $('#fPrice').value.trim(), note: $('#fNote').value.trim(), links
+    name: name, image: normalizeImg($('#fImage').value), status: formStatus,
+    price: $('#fPrice').value.trim(), note: $('#fNote').value.trim(), links: links
   };
-  const btn = $('#saveBtn'); btn.disabled = true; btn.textContent = 'กำลังบันทึก…';
-  try{
-    const saved = await api('saveItem', data);
-    const i = items.findIndex(x => x.id === saved.id);
+  var btn = $('#saveBtn'); btn.disabled = true; btn.textContent = 'กำลังบันทึก…';
+  api('saveItem', data).then(function (saved) {
+    var i = items.findIndex(function (x) { return x.id === saved.id; });
     if (i >= 0) items[i] = saved; else items.push(saved);
     $('#modal').hidden = true; editing = null; render(); toast('บันทึกแล้ว ✓');
-  }catch(err){
-    toast('บันทึกไม่สำเร็จ: ' + (err.message || err));
-  }finally{
+  }).catch(function (err) {
+    toast('บันทึกไม่สำเร็จ: ' + ((err && err.message) || err));
+  }).then(function () {
     btn.disabled = false; btn.textContent = 'บันทึก';
-  }
+  });
 });
 
-document.addEventListener('keydown', e => {
+document.addEventListener('keydown', function (e) {
   if (e.key !== 'Escape') return;
   if (!$('#lightbox').hidden) $('#lightbox').hidden = true;
   else if (!$('#modal').hidden) closeForm();
 });
 
 /* ---------- init ---------- */
-(function init(){
+(function init() {
   filter = store.get('filter', 'all');
   if (filter !== 'all' && !STATUS[filter]) filter = 'all';
-  const size = store.get('size', '260');
+  var size = store.get('size', '260');
   $('#size').value = size; document.documentElement.style.setProperty('--card-w', size + 'px');
   renderTabs();
   api('getItems')
-    .then(list => { items = list; render(); })
-    .catch(err => { $('#main').innerHTML = `<p class="none">โหลดข้อมูลไม่สำเร็จ: ${esc(err.message || err)}</p>`; });
+    .then(function (list) { items = list || []; render(); })
+    .catch(function (err) { setKids($('#main'), h('p', { cls: 'none' }, 'โหลดข้อมูลไม่สำเร็จ: ' + ((err && err.message) || err))); });
 })();
 </script>
 </body>
