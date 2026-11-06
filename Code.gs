@@ -3,6 +3,7 @@
  * ข้อมูลเก็บใน Google Sheet (แท็บ "Wishlist") / รูปที่อัปโหลดเก็บใน Drive โฟลเดอร์ "Wishlist Images"
  */
 
+const SPREADSHEET_ID = '1Ayz7Nems696OvDZ4VklKUm8F3wHuBiMoyVQT-a2iUlk';
 const SHEET_NAME = 'Wishlist';
 const FOLDER_NAME = 'Wishlist Images';
 const HEADERS = ['id', 'name', 'image', 'links', 'status', 'price', 'note', 'createdAt', 'updatedAt'];
@@ -18,7 +19,7 @@ function doGet() {
 /* ---------- Sheet helpers ---------- */
 
 function getSheet_() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
   let sh = ss.getSheetByName(SHEET_NAME);
   if (!sh) {
     sh = ss.insertSheet(SHEET_NAME);
